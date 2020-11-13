@@ -1,47 +1,28 @@
-function report(BIDS, Subj, Ses, Run, ReadNII)
-% Create a short summary of the acquisition parameters of a BIDS dataset
-% FORMAT bids.report(BIDS, Subj, Ses, Run, ReadNII)
+function varargout = report(BIDS, Type, Subj, Ses, Run, ReadNII)
+% Create a text summary of a BIDS dataset
+% FORMAT R = bids.report(BIDS, Type, Subj, Ses, Run, ReadNII)
+% BIDS     - directory formatted according to BIDS [Default: pwd]
 %
-% INPUTS:
-% - BIDS: directory formatted according to BIDS [Default: pwd]
+% Type     - Specfies the type of report {'short','article','detailed'}
+%            [Default: 'short']
+% Subj     - Specifies which subject(s) to use as template [Default: 1]
+% Ses      - Specifies which session(s) to use as template [Default: 1]
+%            Can be a vector. Set to 0 to use all sessions.
+% Run      - Specifies which BOLD run(s) to use as template [Default: 1]
+% ReadNII  - Specifies whether or not to read NIfTI headers [Default: true]
 %
-% - Subj: Specifies which subject(s) to take as template.
-% - Ses:  Specifies which session(s) to take as template. Can be a vector.
-%         Set to 0 to do all sessions.
-% - Run:  Specifies which BOLD run(s) to take as template.
-% - ReadNII: If set to 1 (default) the function will try to read the
-%             NIfTI file to get more information. This relies on the
-%             spm_vol.m function from SPM.
+% R        - string containing report. If not specified, the text report is
+%            displayed on screen.
 %
-% Unless specified the function will only read the data from the first
+% Unless specified, the function will only read the data from the first
 % subject, session, and run (for each task of BOLD). This can be an issue
 % if different subjects/sessions contain very different data.
 %
 % See also:
-% bids
-
-%__________________________________________________________________________
-%
-% BIDS (Brain Imaging Data Structure): https://bids.neuroimaging.io/
-%   The brain imaging data structure, a format for organizing and
-%   describing outputs of neuroimaging experiments.
-%   K. J. Gorgolewski et al, Scientific Data, 2016.
-%__________________________________________________________________________
+% bids.layout
 
 % Copyright (C) 2018, Remi Gau
 % Copyright (C) 2018--, BIDS-MATLAB developers
-
-% TODO
-%--------------------------------------------------------------------------
-% - deal with DWI bval/bvec values not read by bids.query
-% - write output to a txt file?
-% - deal with "EEG" / "MEG"
-% - deal with "events": compute some summary statistics as suggested in
-% COBIDAS report
-% - report summary statistics on participants as suggested in COBIDAS report
-% - check if all subjects have the same content?
-% - adapt for several subjects or runs
-% - take care of other recommended metafield in BIDS specs or COBIDAS?
 
 
 %-Check inputs
@@ -49,29 +30,25 @@ function report(BIDS, Subj, Ses, Run, ReadNII)
 if ~nargin
     BIDS = pwd;
 end
-if nargin < 2 || isempty(Subj)
+if nargin < 2 || isempty(Type)
+    Type = 'short';
+end
+if nargin < 3 || isempty(Subj)
     Subj = 1;
 end
-if nargin < 3 || isempty(Ses)
+if nargin < 4 || isempty(Ses)
     Ses = 1;
 end
-if nargin < 4 || isempty(Run)
+if nargin < 5 || isempty(Run)
     Run = 1;
 end
-if nargin < 5
+if nargin < 6
     ReadNII = true;
 end
-ReadNII = ReadNII & exist('spm_vol','file') == 2;
 
-%-Parse the BIDS dataset directory
+%-Parse the BIDS dataset, if necessary
 %--------------------------------------------------------------------------
-if ~isstruct(BIDS)
-    fprintf('\n-------------------------\n')
-    fprintf('  Reading BIDS: %s', BIDS)
-    fprintf('\n-------------------------\n')
-    BIDS = bids.layout(BIDS);
-    fprintf('Done.\n\n')
-end
+BIDS = bids.layout(BIDS);
 
 %-Get sessions
 %--------------------------------------------------------------------------
@@ -84,6 +61,62 @@ if Ses == 0
     Ses = 1:numel(sess_ls);
 end
 
+%-Text report
+%==========================================================================
+switch lower(Type)
+    case 'short'
+        R = text_report_short(BIDS);
+    case 'detailed'
+        warning('Option not yet supported.');
+        R = '';
+    case 'article'
+        R = text_report_article(BIDS,subjs_ls,Subj,sess_ls,Ses,Run,ReadNII);
+    otherwise
+        error('Unknown option.');
+end
+
+%-Return, display or save as file
+%--------------------------------------------------------------------------
+if ~nargout
+    fprintf('%s',R);
+elseif false
+    fid = fopen(output_file,'wt');
+    if fid == -1
+        error('Could not open file for writing.');
+    end
+    fprintf(fid,'%s',R);
+    fclose(fid);
+else
+    varargout = { R };
+end
+
+
+%==========================================================================
+function R = text_report_short(BIDS)
+d = dict;
+t = bids.query(BIDS,'types');
+t = cellfun(@(x) d.datatypes(x),t,'UniformOutput',false);
+t =  sprintf('%s, ',t{:});
+m = bids.query(BIDS,'modalities');
+m = cellfun(@(x) d.modality(x),m,'UniformOutput',false);
+m = sprintf('%s, ',m{:});
+R = sprintf(['BIDS dataset: %s\n',...
+    '%d subjects with %d sessions and %d runs.\n',...
+    'Data types are: %s\n',...
+    'Modalities are: %s\n'],...
+    BIDS.dir,...
+    numel(bids.query(BIDS,'subjects')),...
+    numel(bids.query(BIDS,'sessions')),...
+    numel(bids.query(BIDS,'sessions')),...
+    t(1:end-2),...
+    m(1:end-2));
+
+
+%==========================================================================
+function R = text_report_article(BIDS,subjs_ls,Subj,sess_ls,Ses,Run,ReadNII)
+
+R = '';
+
 %-Scanner details
 %--------------------------------------------------------------------------
 % str = 'MR data were acquired using a {tesla}-Tesla {manu} {model} MRI scanner.';
@@ -91,12 +124,6 @@ end
 %-Loop through all the required sessions
 %--------------------------------------------------------------------------
 for iSess = Ses
-    
-    if numel(Ses)~=1 && ~strcmp(sess_ls{iSess}, '')
-        fprintf('\n-------------------------\n')
-        fprintf('  Working on session: %s', sess_ls{iSess})
-        fprintf('\n-------------------------\n')
-    end
     
     types_ls = bids.query(BIDS,'types', 'sub', subjs_ls(Subj), 'ses', sess_ls(iSess));
     tasks_ls = bids.query(BIDS,'tasks', 'sub', subjs_ls(Subj), 'ses', sess_ls(iSess));
@@ -106,37 +133,24 @@ for iSess = Ses
         
         switch types_ls{iType}
             
-            case {'T1w' 'inplaneT2' 'T1map' 'FLASH'}
-                
-                %-Anatomical
-                %----------------------------------------------------------
-                fprintf('Working on anat...\n')
+            %-Anatomical
+            %--------------------------------------------------------------
+            case {'T1w', 'inplaneT2', 'T1map', 'FLASH'}
                 
                 % anat text template
-                anat_text = cat(2, ...
-                    '%s %s %s structural MRI data were collected (%s slices; \n', ...
-                    'repetition time, TR= %s ms; echo time, TE= %s ms; flip angle, FA=%s deg; \n', ...
-                    'field of view, FOV= %s mm; matrix size= %s; voxel size= %s mm) \n\n');
+                anat_tpl = fullfile(fileparts(mfilename('fullpath')),...
+                    'config','anat.tpl');
                 
-                % get the parameters
+                % get parameters
                 acq_param = get_acq_param(BIDS, subjs_ls{Subj}, sess_ls{iSess}, ...
                     types_ls{iType}, '', '', ReadNII);
                 
+                % render template
+                R = bids.internal.parse_template(anat_tpl,acq_param);
                 
-                % print output
-                fprintf('\n ANAT REPORT \n')
-                fprintf(anat_text,...
-                    acq_param.type, acq_param.variants, acq_param.seqs, ...
-                    acq_param.n_slices, acq_param.tr, ...
-                    acq_param.te, acq_param.fa, ...
-                    acq_param.fov, acq_param.ms, acq_param.vs);
-                fprintf('\n')
-                
-                
+            %-Functional
+            %--------------------------------------------------------------
             case 'bold'
-                %-Functional
-                %----------------------------------------------------------
-                fprintf('Working on func...\n')
                 
                 % func text template
                 func_text = cat(2, ...
@@ -173,7 +187,6 @@ for iSess = Ses
                     end
                     
                     % print output
-                    fprintf('\n FUNC REPORT \n')
                     fprintf(func_text,...
                         acq_param.run_str, acq_param.task, acq_param.variants, acq_param.seqs, ...
                         acq_param.n_slices, acq_param.so_str, acq_param.tr, ...
@@ -185,11 +198,10 @@ for iSess = Ses
                     fprintf('\n\n')
                 end
                 
-                
+            %-Fieldmap
+            %--------------------------------------------------------------
             case 'phasediff'
-                %-Fieldmap
-                %----------------------------------------------------------
-                fprintf('Working on fmap...\n')
+                %warning('fmap not supported yet');
                 
                 % fmap text template
                 fmap_text = cat(2, ...
@@ -197,89 +209,32 @@ for iSess = Ses
                     'echo time 1 / 2, TE 1/2= %s ms; flip angle, FA= %s deg; field of view, FOV= %s mm; matrix size= %s; \n',...
                     'voxel size= %s mm) was acquired %s. \n\n');
                 
-                % loop through the tasks
-                for iTask = 1:numel(tasks_ls)
-                    
-                    runs_ls = bids.query(BIDS,'runs','sub', subjs_ls{Subj}, 'ses', sess_ls{iSess}, ...
-                        'type', 'phasediff');
-                    
-                    if isempty(runs_ls)
-                        % get the parameters for that task
-                        acq_param = get_acq_param(BIDS, subjs_ls{Subj}, sess_ls{iSess}, ...
-                            'phasediff', '', '', ReadNII);
-                    else
-                        % get the parameters for that task
-                        acq_param = get_acq_param(BIDS, subjs_ls{Subj}, sess_ls{iSess}, ...
-                            'phasediff', '', runs_ls{Run}, ReadNII);
-                    end
-                    
-                    % goes through task list to check which fieldmap is for which
-                    % run
-                    acq_param.for = [];
-                    nb_run = [];
-                    tmp = strfind(acq_param.for_str,tasks_ls{iTask});
-                    if ~iscell(tmp), tmp = {tmp}; end
-                    nb_run(iTask) = sum(~cellfun('isempty', tmp)); %#ok<AGROW>
-                    acq_param.for = sprintf('for %i runs of %s, ', nb_run, tasks_ls{iTask});
-                    
-                    % print output
-                    fprintf('\n FMAP REPORT \n')
-                    fprintf(fmap_text,...
-                        acq_param.variants, acq_param.seqs, acq_param.phs_enc_dir, acq_param.n_slices, acq_param.tr, ...
-                        acq_param.te, acq_param.fa, acq_param.fov, acq_param.ms, ...
-                        acq_param.vs, acq_param.for);
-                    fprintf('\n\n')
-                    
-                end
-                
-                
+            %-DWI
+            %--------------------------------------------------------------
             case 'dwi'
-                %-DWI
-                %----------------------------------------------------------
-                fprintf('Working on dwi...\n')
+                %warning('dwi not supported yet');
                 
                 % dwi text template
-                fmap_text = cat(2, ...
+                dwi_text = cat(2, ...
                     'One run of %s %s diffusion-weighted (dMRI) data were collected (%s  slices %s ; repetition time, TR= %s ms \n', ...
                     'echo time, TE= %s ms; flip angle, FA= %s deg; field of view, FOV= %s mm; matrix size= %s ; voxel size= %s mm \n', ...
                     'b-values of %s acquired; %s diffusion directions; multiband factor= %s ). \n\n');
                 
-                % get the parameters
-                acq_param = get_acq_param(BIDS, subjs_ls{Subj}, sess_ls{iSess}, ...
-                    'dwi', '', '', ReadNII);
-                
-                % dirty hack to try to look into the BIDS structure as bids.query does not
-                % support querying directly for bval and bvec
-                try
-                    acq_param.n_vecs = num2str(size(BIDS.subjects(Subj).dwi.bval,2));
-                    %             acq_param.bval_str = ???
-                catch
-                    warning('Could not read the bval & bvec values.')
-                end
-                
-                % print output
-                fprintf('\n DWI REPORT \n')
-                fprintf(fmap_text,...
-                    acq_param.variants, acq_param.seqs, acq_param.n_slices, acq_param.so_str, acq_param.tr,...
-                    acq_param.te, acq_param.fa, acq_param.fov, acq_param.ms, acq_param.vs, ...
-                    acq_param.bval_str, acq_param.n_vecs, acq_param.mb_str);
-                fprintf('\n\n')
-                
-                
+            %-Physio
+            %--------------------------------------------------------------
             case 'physio'
-                %-Physio
-                %----------------------------------------------------------
-                warning('physio not supported yet')
+                %warning('physio not supported yet');
                 
-            case {'headshape' 'meg' 'eeg' 'channels'}
-                %-M/EEG
-                %----------------------------------------------------------
-                warning('MEEG not supported yet')
+            %-M/EEG
+            %--------------------------------------------------------------
+            case {'eeg', 'meg', 'channels', 'headshape'}
+                %warning('MEEG not supported yet');
                 
+            %-Events
+            %--------------------------------------------------------------
             case 'events'
-                %-Events
-                %----------------------------------------------------------
-                warning('events not supported yet')
+                %warning('events not supported yet');
+                
         end
         
     end
@@ -288,7 +243,7 @@ end
 
 
 %==========================================================================
-function acq_param = get_acq_param(BIDS, subj, sess, type, task, run, ReadGZ)
+function acq_param = get_acq_param(BIDS, subj, sess, type, task, run, ReadNII)
 % Will get info from acquisition parameters from the BIDS structure or from
 % the NIfTI files
 
@@ -343,7 +298,7 @@ elseif strcmp(type, 'phasediff')
     
 end
 
-fprintf(' - %s\n', filename{1})
+%fprintf(' - %s\n', filename{1})
 
 if isfield(metadata, 'EchoTime')
     acq_param.te = num2str(metadata.EchoTime*1000);
@@ -373,15 +328,14 @@ end
 
 %-Try to read the relevant NIfTI file to get more info from it
 %--------------------------------------------------------------------------
-if ReadGZ
+if ReadNII
     fprintf('  Opening file %s.\n',filename{1})
     try
         % read the header of the NIfTI file
-        hdr = spm_vol(filename{1});
-        acq_param.n_vols  = num2str(numel(hdr)); % nb volumes
+        hdr = read_nifti_header(filename{1});
+        acq_param.n_vols = hdr.dim(4); % nb volumes
         
-        hdr = hdr(1);
-        dim = abs(hdr.dim);
+        dim = hdr.dim;
         acq_param.n_slices = sprintf('%i', dim(3)); % nb slices
         acq_param.ms = sprintf('%i X %i', dim(1), dim(2)); %matrix size
         
@@ -414,3 +368,110 @@ elseif I(1)>I(2)
 else
     ST_def = '????';
 end
+
+
+%==========================================================================
+function hdr = read_nifti_header(filename)
+% Read NIfTI-1 header
+hdr = [];
+fp  = fopen(filename,'r','native'); % TODO % detect gz files
+if fp==-1, return; end
+
+sts = fseek(fp,40,'bof');
+if sts==-1, fclose(fp); return; end
+dim = fread(fp,8,'*int16');
+fclose(fp);
+if isempty(dim), return; end
+if dim(1)<1 || dim(1)>7
+    dim = swapbytes(dim);
+end
+dim = double(dim(2:(dim(1)+1)))';
+dim = [dim 1 1 1 1 1];
+
+mat = eye(4); % TODO % read qform, sform
+
+hdr = struct('dim',dim,'mat',mat);
+
+
+%==========================================================================
+function d = dict
+% Term dictionary
+persistent D
+if ~isempty(D), d = D; return; end
+
+d.modality = containers.Map;
+d.modality('anat') = 'Anatomy imaging data';
+d.modality('func') = 'Task (including resting state) imaging data';
+d.modality('dwi')  = 'Diffusion imaging data';
+d.modality('fmap') = 'Fieldmap data';
+d.modality('meg')  = 'MEG recording data';
+d.modality('eeg')  = 'EEG recording data';
+d.modality('ieeg') = 'iEEG recording data';
+d.modality('beh')  = 'Behavioral recording data';
+
+d.datatypes = containers.Map;
+d.datatypes('T1w')         = 'T1 weighted';
+d.datatypes('T2w')         = 'T2 weighted';
+d.datatypes('T1rho')       = 'T1 Rho map';
+d.datatypes('T1map')       = 'Quantitative T1 map';
+d.datatypes('T2 map')      = 'Quantitative T2 map';
+d.datatypes('T2star')      = 'T2*';
+d.datatypes('FLAIR')       = 'FLAIR';
+d.datatypes('FLASH')       = 'FLASH';
+d.datatypes('MEFLASH')     = 'MEFLASH'; % not in specs
+d.datatypes('PD')          = 'Proton density';
+d.datatypes('PDmap')       = 'Proton density map';
+d.datatypes('PDT2')        = 'Combined PD/T2';
+d.datatypes('inplaneT1')   = 'Inplane T1';
+d.datatypes('inplaneT2')   = 'Inplane T2';
+d.datatypes('angio')       = 'Angiography';
+d.datatypes('dwi')         = 'Diffusion weighted';
+d.datatypes('bold')        = 'BOLD';
+d.datatypes('cbv')         = 'CBV';
+d.datatypes('phase')       = 'Phase';
+d.datatypes('phase1')      = 'Phase';
+d.datatypes('phase2')      = 'Phase';
+d.datatypes('phasediff')   = 'Phase difference image';
+d.datatypes('magnitude')   = 'Magnitude image';
+d.datatypes('magnitude1')  = 'Magnitude image';
+d.datatypes('magnitude2')  = 'Magnitude image';
+d.datatypes('fieldmap')    = 'Fieldmap image';
+d.datatypes('epi')         = 'PEpolar';
+d.datatypes('coordsystem') = 'Coordinate system';
+d.datatypes('events')      = 'Events';
+d.datatypes('headshape')   = 'Headshape';
+d.datatypes('channels')    = 'Channels';
+d.datatypes('electrodes')  = 'Electrodes';
+d.datatypes('eeg')         = 'EEG';
+d.datatypes('ieeg')        = 'iEEG';
+d.datatypes('meg')         = 'MEG';
+d.datatypes('physio')      = 'Physiological recording';
+d.datatypes('stim')        = 'Stimulus';
+d.datatypes('photo')       = 'Photo';
+
+d.dir = containers.Map;
+d.dir('i')  = 'left to right';
+d.dir('i-') = 'right to left';
+d.dir('j')  = 'posterior to anterior';
+d.dir('j-') = 'anterior to posterior';
+d.dir('k')  = 'inferior to superior';
+d.dir('k-') = 'superior to inferior';
+
+d.seq = containers.Map;
+d.seq('EP') = 'echo planar';
+d.seq('GR') = 'gradient recalled';
+d.seq('IR') = 'inversion recovery';
+d.seq('RM') = 'research mode';
+d.seq('SE') = 'spin echo';
+
+d.seqvar = containers.Map;
+d.seqvar('MP')   = 'MAG prepared';
+d.seqvar('MTC')  = 'magnetization transfer contrast';
+d.seqvar('NONE') = 'no sequence variant';
+d.seqvar('OSP')  = 'oversampling phase';
+d.seqvar('SK')   = 'segmented k-space';
+d.seqvar('SP')   = 'spoiled';
+d.seqvar('SS')   = 'steady state';
+d.seqvar('TRSS') = 'time reversed steady state';
+
+D = d;
